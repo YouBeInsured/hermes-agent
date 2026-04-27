@@ -29,6 +29,7 @@ MCP client config (e.g. claude_desktop_config.json):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -48,10 +49,11 @@ logger = logging.getLogger("hermes.mcp_serve")
 
 _MCP_SERVER_AVAILABLE = False
 try:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.fastmcp import Context, FastMCP
 
     _MCP_SERVER_AVAILABLE = True
 except ImportError:
+    Context = None  # type: ignore[assignment,misc]
     FastMCP = None  # type: ignore[assignment,misc]
 
 
@@ -428,6 +430,13 @@ class EventBridge:
 # MCP Server
 # ---------------------------------------------------------------------------
 
+async def _mcp_log(ctx: "Context", message: str) -> None:
+    """Send an info log message to the MCP client, ignoring transport errors."""
+    try:
+        await ctx.session.send_log_message(level="info", data=message)
+    except Exception:
+        pass
+
 def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
     """Create and return the Hermes MCP server with all tools registered."""
     if not _MCP_SERVER_AVAILABLE:
@@ -450,7 +459,8 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
     # -- conversations_list ------------------------------------------------
 
     @mcp.tool()
-    def conversations_list(
+    async def conversations_list(
+        ctx: Context,
         platform: Optional[str] = None,
         limit: int = 50,
         search: Optional[str] = None,
@@ -465,6 +475,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
             limit: Maximum number of conversations to return (default 50)
             search: Optional text to filter conversations by name
         """
+        await _mcp_log(ctx, "conversations_list called")
         entries = _load_sessions_index()
         conversations = []
 
@@ -506,12 +517,13 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
     # -- conversation_get --------------------------------------------------
 
     @mcp.tool()
-    def conversation_get(session_key: str) -> str:
+    async def conversation_get(ctx: Context, session_key: str) -> str:
         """Get detailed info about one conversation by its session key.
 
         Args:
             session_key: The session key from conversations_list
         """
+        await _mcp_log(ctx, f"conversation_get called: {session_key}")
         entries = _load_sessions_index()
         entry = entries.get(session_key)
 
@@ -539,7 +551,8 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
     # -- messages_read -----------------------------------------------------
 
     @mcp.tool()
-    def messages_read(
+    async def messages_read(
+        ctx: Context,
         session_key: str,
         limit: int = 50,
     ) -> str:
@@ -552,6 +565,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
             session_key: The session key from conversations_list
             limit: Maximum number of messages to return (default 50, most recent)
         """
+        await _mcp_log(ctx, f"messages_read called: {session_key}")
         entries = _load_sessions_index()
         entry = entries.get(session_key)
         if not entry:
@@ -595,7 +609,8 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
     # -- attachments_fetch -------------------------------------------------
 
     @mcp.tool()
-    def attachments_fetch(
+    async def attachments_fetch(
+        ctx: Context,
         session_key: str,
         message_id: str,
     ) -> str:
@@ -608,6 +623,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
             session_key: The session key from conversations_list
             message_id: The message ID from messages_read
         """
+        await _mcp_log(ctx, f"attachments_fetch called: {session_key} message={message_id}")
         entries = _load_sessions_index()
         entry = entries.get(session_key)
         if not entry:
@@ -647,7 +663,8 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
     # -- events_poll -------------------------------------------------------
 
     @mcp.tool()
-    def events_poll(
+    async def events_poll(
+        ctx: Context,
         after_cursor: int = 0,
         session_key: Optional[str] = None,
         limit: int = 20,
@@ -664,6 +681,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
             session_key: Optional filter to one conversation
             limit: Maximum events to return (default 20)
         """
+        await _mcp_log(ctx, f"events_poll called: cursor={after_cursor} session={session_key}")
         result = bridge.poll_events(
             after_cursor=after_cursor,
             session_key=session_key,
@@ -674,7 +692,8 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
     # -- events_wait -------------------------------------------------------
 
     @mcp.tool()
-    def events_wait(
+    async def events_wait(
+        ctx: Context,
         after_cursor: int = 0,
         session_key: Optional[str] = None,
         timeout_ms: int = 30000,
@@ -689,7 +708,9 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
             session_key: Optional filter to one conversation
             timeout_ms: Maximum wait time in milliseconds (default 30000)
         """
-        event = bridge.wait_for_event(
+        await _mcp_log(ctx, f"events_wait called: cursor={after_cursor} session={session_key} timeout={timeout_ms}ms")
+        event = await asyncio.to_thread(
+            bridge.wait_for_event,
             after_cursor=after_cursor,
             session_key=session_key,
             timeout_ms=min(timeout_ms, 300000),  # Cap at 5 minutes
@@ -701,7 +722,8 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
     # -- messages_send -----------------------------------------------------
 
     @mcp.tool()
-    def messages_send(
+    async def messages_send(
+        ctx: Context,
         target: str,
         message: str,
     ) -> str:
@@ -720,6 +742,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
             target: Platform target in "platform:identifier" format
             message: The message text to send
         """
+        await _mcp_log(ctx, f"messages_send called: target={target}")
         if not target or not message:
             return json.dumps({"error": "Both target and message are required"})
 
@@ -737,7 +760,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
     # -- channels_list -----------------------------------------------------
 
     @mcp.tool()
-    def channels_list(platform: Optional[str] = None) -> str:
+    async def channels_list(ctx: Context, platform: Optional[str] = None) -> str:
         """List available messaging channels and targets across platforms.
 
         Returns channels that you can send messages to. The target strings
@@ -746,6 +769,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
         Args:
             platform: Filter by platform name (telegram, discord, slack, etc.)
         """
+        await _mcp_log(ctx, "channels_list called")
         directory = _load_channel_directory()
         if not directory:
             entries = _load_sessions_index()
@@ -791,13 +815,14 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
     # -- permissions_list_open ---------------------------------------------
 
     @mcp.tool()
-    def permissions_list_open() -> str:
+    async def permissions_list_open(ctx: Context) -> str:
         """List pending approval requests observed during this bridge session.
 
         Returns exec and plugin approval requests that the bridge has seen
         since it started. Approvals are live-session only — older approvals
         from before the bridge connected are not included.
         """
+        await _mcp_log(ctx, "permissions_list_open called")
         approvals = bridge.list_pending_approvals()
         return json.dumps({
             "count": len(approvals),
@@ -807,7 +832,8 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
     # -- permissions_respond -----------------------------------------------
 
     @mcp.tool()
-    def permissions_respond(
+    async def permissions_respond(
+        ctx: Context,
         id: str,
         decision: str,
     ) -> str:
@@ -817,6 +843,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
             id: The approval ID from permissions_list_open
             decision: One of "allow-once", "allow-always", or "deny"
         """
+        await _mcp_log(ctx, f"permissions_respond called: id={id} decision={decision}")
         if decision not in ("allow-once", "allow-always", "deny"):
             return json.dumps({
                 "error": f"Invalid decision: {decision}. "
