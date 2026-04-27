@@ -430,6 +430,13 @@ class EventBridge:
 # MCP Server
 # ---------------------------------------------------------------------------
 
+async def _mcp_log(ctx: "Context", message: str) -> None:
+    """Send an info log message to the MCP client, ignoring transport errors."""
+    try:
+        await ctx.session.send_log_message(level="info", data=message)
+    except Exception:
+        pass
+
 def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
     """Create and return the Hermes MCP server with all tools registered."""
     if not _MCP_SERVER_AVAILABLE:
@@ -468,7 +475,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
             limit: Maximum number of conversations to return (default 50)
             search: Optional text to filter conversations by name
         """
-        await ctx.session.send_log_message(level="info", data="conversations_list called")
+        await _mcp_log(ctx, "conversations_list called")
         entries = _load_sessions_index()
         conversations = []
 
@@ -516,7 +523,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
         Args:
             session_key: The session key from conversations_list
         """
-        await ctx.session.send_log_message(level="info", data=f"conversation_get called: {session_key}")
+        await _mcp_log(ctx, f"conversation_get called: {session_key}")
         entries = _load_sessions_index()
         entry = entries.get(session_key)
 
@@ -558,7 +565,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
             session_key: The session key from conversations_list
             limit: Maximum number of messages to return (default 50, most recent)
         """
-        await ctx.session.send_log_message(level="info", data=f"messages_read called: {session_key}")
+        await _mcp_log(ctx, f"messages_read called: {session_key}")
         entries = _load_sessions_index()
         entry = entries.get(session_key)
         if not entry:
@@ -616,10 +623,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
             session_key: The session key from conversations_list
             message_id: The message ID from messages_read
         """
-        await ctx.session.send_log_message(
-            level="info",
-            data=f"attachments_fetch called: {session_key} message={message_id}",
-        )
+        await _mcp_log(ctx, f"attachments_fetch called: {session_key} message={message_id}")
         entries = _load_sessions_index()
         entry = entries.get(session_key)
         if not entry:
@@ -677,10 +681,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
             session_key: Optional filter to one conversation
             limit: Maximum events to return (default 20)
         """
-        await ctx.session.send_log_message(
-            level="info",
-            data=f"events_poll called: cursor={after_cursor} session={session_key}",
-        )
+        await _mcp_log(ctx, f"events_poll called: cursor={after_cursor} session={session_key}")
         result = bridge.poll_events(
             after_cursor=after_cursor,
             session_key=session_key,
@@ -707,10 +708,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
             session_key: Optional filter to one conversation
             timeout_ms: Maximum wait time in milliseconds (default 30000)
         """
-        await ctx.session.send_log_message(
-            level="info",
-            data=f"events_wait called: cursor={after_cursor} session={session_key} timeout={timeout_ms}ms",
-        )
+        await _mcp_log(ctx, f"events_wait called: cursor={after_cursor} session={session_key} timeout={timeout_ms}ms")
         event = await asyncio.to_thread(
             bridge.wait_for_event,
             after_cursor=after_cursor,
@@ -744,10 +742,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
             target: Platform target in "platform:identifier" format
             message: The message text to send
         """
-        await ctx.session.send_log_message(
-            level="info",
-            data=f"messages_send called: target={target}",
-        )
+        await _mcp_log(ctx, f"messages_send called: target={target}")
         if not target or not message:
             return json.dumps({"error": "Both target and message are required"})
 
@@ -774,7 +769,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
         Args:
             platform: Filter by platform name (telegram, discord, slack, etc.)
         """
-        await ctx.session.send_log_message(level="info", data="channels_list called")
+        await _mcp_log(ctx, "channels_list called")
         directory = _load_channel_directory()
         if not directory:
             entries = _load_sessions_index()
@@ -827,7 +822,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
         since it started. Approvals are live-session only — older approvals
         from before the bridge connected are not included.
         """
-        await ctx.session.send_log_message(level="info", data="permissions_list_open called")
+        await _mcp_log(ctx, "permissions_list_open called")
         approvals = bridge.list_pending_approvals()
         return json.dumps({
             "count": len(approvals),
@@ -848,10 +843,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
             id: The approval ID from permissions_list_open
             decision: One of "allow-once", "allow-always", or "deny"
         """
-        await ctx.session.send_log_message(
-            level="info",
-            data=f"permissions_respond called: id={id} decision={decision}",
-        )
+        await _mcp_log(ctx, f"permissions_respond called: id={id} decision={decision}")
         if decision not in ("allow-once", "allow-always", "deny"):
             return json.dumps({
                 "error": f"Invalid decision: {decision}. "
